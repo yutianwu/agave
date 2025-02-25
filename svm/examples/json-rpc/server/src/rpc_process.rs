@@ -920,3 +920,100 @@ fn verify_pubkey(input: &str) -> Result<Pubkey> {
         .parse()
         .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use spl_token_2022::solana_program::bpf_loader_upgradeable;
+    use {
+        super::*,
+        solana_sdk::{
+            instruction::{AccountMeta, Instruction},
+            message::Message,
+            pubkey::Pubkey,
+            signature::{Keypair, Signer},
+            transaction::Transaction,
+        },
+        std::{str::FromStr, fs, path::PathBuf},
+    };
+
+    fn create_test_processor() -> JsonRpcRequestProcessor {
+        let accounts_path = PathBuf::from("/Users/wuzhenxing/Documents/dev/solana/agave/svm/examples/json-rpc/program/accounts-bak.json");
+        let ledger_path = PathBuf::from("");
+        
+        let config = JsonRpcConfig {
+            accounts_path,
+            ledger_path,
+            rpc_threads: 1,
+            rpc_niceness_adj: 0,
+            max_request_body_size: Some(MAX_REQUEST_BODY_SIZE),
+        };
+
+        let exit = create_exit(Arc::new(AtomicBool::new(false)));
+        JsonRpcRequestProcessor::new(config, exit)
+    }
+
+    #[test]
+    fn test_simulate_transaction() {
+        let processor = create_test_processor();
+
+        // Create player from base58 private key
+        let player_keypair_str = "x";
+        let player_keypair_bytes = bs58::decode(player_keypair_str)
+            .into_vec()
+            .unwrap();
+        let player = Keypair::from_bytes(&player_keypair_bytes).unwrap();
+        
+        let program_id = Pubkey::from_str("qpTWpLBhVs4N8odNY21sK2JBVGtgRxSsQFpTk9tR6Dr").unwrap();
+
+        // Create a short seed for greeting account
+        let greeting_seed = "hello";
+        let greeting_pubkey = Pubkey::create_with_seed(
+            &player.pubkey(),
+            greeting_seed,
+            &program_id,
+        ).unwrap();
+
+        println!("Player pubkey: {:?}", player.pubkey());
+        println!("Greeting pubkey: {:?}", greeting_pubkey);
+
+        // Create instruction data
+        let data = [1u8];
+        let instruction = Instruction::new_with_bytes(
+            program_id,
+            &data,
+            vec![AccountMeta::new(greeting_pubkey, false)],
+        );
+
+        // Create transaction
+        let message = Message::new(&[instruction], Some(&player.pubkey()));
+        let transaction = Transaction::new(
+            &[&player],
+            message,
+            Hash::default(),
+        );
+
+        // Convert to sanitized transaction
+        let sanitized_transaction = SanitizedTransaction::try_create(
+            transaction.into(),
+            MessageHash::Compute,
+            None,
+            processor.clone(),
+            &HashSet::new(),
+        )
+        .unwrap();
+
+        // Execute transaction simulation
+        let simulation_result = processor.simulate_transaction_unchecked(
+            &sanitized_transaction,
+            true, // Enable CPI recording
+        );
+
+        // Print logs for debugging
+        println!("Simulation logs: {:?}", simulation_result.logs);
+        println!("Simulation result: {:?}", simulation_result.result);
+
+        // Verify results
+        assert!(simulation_result.result.is_ok(), "Transaction simulation failed");
+        assert!(!simulation_result.logs.is_empty(), "Expected logs to be present");
+    }
+}
