@@ -12,6 +12,8 @@ frozen-abi = []
 borsh = "0.9"
 
 solana-program = { version = "=2.2.1" }
+uint = { version = "0.9", default-features = false }
+lazy_static = "1.4.0"
 
 [lib]
 name = "program"

@@ -963,7 +963,7 @@ mod tests {
             .unwrap();
         let player = Keypair::from_bytes(&player_keypair_bytes).unwrap();
         
-        let program_id = Pubkey::from_str("qpTWpLBhVs4N8odNY21sK2JBVGtgRxSsQFpTk9tR6Dr").unwrap();
+        let program_id = Pubkey::from_str("9icUdyHNJLiBjAD57sVEDcod7exWh2mwFGVYtL5Yb6Va").unwrap();
 
         // Create a short seed for greeting account
         let greeting_seed = "hello";
