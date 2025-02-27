@@ -22,13 +22,6 @@ pub fn process_instruction(
     accounts: &[AccountInfo],
     _instruction_data: &[u8],
 ) -> entrypoint::ProgramResult {
-    // Get the account that stores greeting count information.
-    let accounts_iter = &mut accounts.iter();
-    let account = next_account_info(accounts_iter)?;
 
-    msg!("account.owner");
-    account.owner.log();
-    msg!("program_id");
-    program_id.log();
     Ok(())
 }
