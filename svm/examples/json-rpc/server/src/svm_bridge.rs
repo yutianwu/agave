@@ -97,7 +97,7 @@ impl TransactionProcessingCallback for MockBankCallback {
 impl MockBankCallback {
     pub fn new(account_map: Vec<(Pubkey, AccountSharedData)>) -> Self {
         Self {
-            feature_set: Arc::new(FeatureSet::default()),
+            feature_set: Arc::new(FeatureSet::all_enabled()),
             account_shared_data: RwLock::new(HashMap::from_iter(account_map)),
         }
     }
@@ -168,6 +168,27 @@ pub fn create_custom_environment<'a>() -> BuiltinProgram<InvokeContext<'a>> {
         .register_function("sol_log_", SyscallLog::vm)
         .expect("Registration failed");
     loader
+        .register_function("sol_log_data", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_memcmp_", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_get_rent_sysvar", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_try_find_program_address", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_memmove_", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_create_program_address", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_sha256", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
         .register_function("sol_log_64_", SyscallLogU64::vm)
         .expect("Registration failed");
     loader
@@ -214,8 +235,11 @@ pub fn create_executable_environment(
         if let Some(account) = mock_bank.get_account_shared_data(key) {
             if account.executable() && *account.owner() == solana_sdk::bpf_loader_upgradeable::id()
             {
+
+                println!("{}", key);
                 let data = account.data();
                 let program_data_account_key = Pubkey::try_from(data[4..].to_vec()).unwrap();
+                println!("{}", program_data_account_key);
                 let program_data_account = mock_bank
                     .get_account_shared_data(&program_data_account_key)
                     .unwrap();

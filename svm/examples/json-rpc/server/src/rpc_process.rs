@@ -883,9 +883,9 @@ fn encode_account<T: ReadableAccount>(
 ) -> Result<UiAccount> {
     if (encoding == UiAccountEncoding::Binary || encoding == UiAccountEncoding::Base58)
         && data_slice
-            .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
-            .unwrap_or(account.data().len())
-            > MAX_BASE58_BYTES
+        .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
+        .unwrap_or(account.data().len())
+        > MAX_BASE58_BYTES
     {
         let message = format!("Encoded binary (base 58) data should be less than {MAX_BASE58_BYTES} bytes, please use Base64 encoding.");
         Err(error::Error {
@@ -912,7 +912,7 @@ fn sanitize_transaction(
         address_loader,
         reserved_account_keys,
     )
-    .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
+        .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
 }
 
 fn verify_pubkey(input: &str) -> Result<Pubkey> {
@@ -923,6 +923,7 @@ fn verify_pubkey(input: &str) -> Result<Pubkey> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use spl_token_2022::solana_program::bpf_loader_upgradeable;
     use {
         super::*,
@@ -937,9 +938,9 @@ mod tests {
     };
 
     fn create_test_processor() -> JsonRpcRequestProcessor {
-        let accounts_path = PathBuf::from("/Users/wuzhenxing/Documents/dev/solana/agave/svm/examples/json-rpc/program/accounts-bak.json");
+        let accounts_path = PathBuf::from("/Users/wuzhenxing/Documents/dev/solana/agave/svm/examples/json-rpc/program/accounts-ray.json");
         let ledger_path = PathBuf::from("");
-        
+
         let config = JsonRpcConfig {
             accounts_path,
             ledger_path,
@@ -962,30 +963,78 @@ mod tests {
             .into_vec()
             .unwrap();
         let player = Keypair::from_bytes(&player_keypair_bytes).unwrap();
-        
-        let program_id = Pubkey::from_str("qpTWpLBhVs4N8odNY21sK2JBVGtgRxSsQFpTk9tR6Dr").unwrap();
-
-        // Create a short seed for greeting account
-        let greeting_seed = "hello";
-        let greeting_pubkey = Pubkey::create_with_seed(
-            &player.pubkey(),
-            greeting_seed,
-            &program_id,
-        ).unwrap();
-
-        println!("Player pubkey: {:?}", player.pubkey());
-        println!("Greeting pubkey: {:?}", greeting_pubkey);
 
         // Create instruction data
-        let data = [1u8];
-        let instruction = Instruction::new_with_bytes(
-            program_id,
-            &data,
-            vec![AccountMeta::new(greeting_pubkey, false)],
+        let instruction1_data = bs58::decode("54c56NEKBNx7").into_vec().unwrap();
+        let instruction1 = Instruction::new_with_bytes(
+            Pubkey::from_str("routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS").unwrap(),
+            &instruction1_data,
+            vec![
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new(Pubkey::from_str("14ryLxgtBbjF6RvdkPb8z4c3R46Dj5WprCVAGtW7EzpN").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("11111111111111111111111111111111").unwrap(), false),
+            ],
+        );
+
+        let instruction2_data = bs58::decode("1GsxhWNYyfq2wn5kYGtu7dH").into_vec().unwrap();
+        let instruction2 = Instruction::new_with_bytes(
+            Pubkey::from_str("routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS").unwrap(),
+            &instruction2_data,
+            vec![
+                AccountMeta::new_readonly(Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("11111111111111111111111111111111").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new(Pubkey::from_str("14ryLxgtBbjF6RvdkPb8z4c3R46Dj5WprCVAGtW7EzpN").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("Cg1sa7AgfqVTQYREXGv4KwB9qBq5ymNddGTd1CdShjxZ").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("Cg1sa7AgfqVTQYREXGv4KwB9qBq5ymNddGTd1CdShjxZ").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("G4GrjuSrudVbTZ6nuSH5dM7kKwnuUCiRfdT3o3PBvgue").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("D4FPEruKEHrG5TenZ2mpDGEfu1iUvTiqBxvpU8HLBvC2").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5dRq83QqWumXK7pdteuG8gnBf9ZmdezbGpEUs9V9cfbF").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("Bva4BCCqFkoF7QWregWL9WSjKrdUnsSbLAV22MmVSBiw").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("FHuaanHdUgekhTut4ZdYUkeqN7xuWMdiySJmGcPpkRir").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("2DUoTjCtAQXwj7NKaRToqf2Q5xkT9X4NNfccC5H1oED6").unwrap(), false),
+            ],
+        );
+
+        let instruction3_data = bs58::decode("7").into_vec().unwrap();
+        let instruction3 = Instruction::new_with_bytes(
+            Pubkey::from_str("routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS").unwrap(),
+            &instruction3_data,
+            vec![
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new(Pubkey::from_str("14ryLxgtBbjF6RvdkPb8z4c3R46Dj5WprCVAGtW7EzpN").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new_readonly(Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("11111111111111111111111111111111").unwrap(), false),
+            ],
+        );
+
+        let instruction4_data = bs58::decode("3m3qUdgDGMdH").into_vec().unwrap();
+        let instruction4 = Instruction::new_with_bytes(
+            Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
+            &instruction4_data,
+            vec![],
+        );
+
+        let instruction5_data = bs58::decode("L2q9if").into_vec().unwrap();
+        let instruction5 = Instruction::new_with_bytes(
+            Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
+            &instruction5_data,
+            vec![],
         );
 
         // Create transaction
-        let message = Message::new(&[instruction], Some(&player.pubkey()));
+        let message = Message::new(&[instruction1, instruction2,
+            instruction3, instruction4, instruction5], Some(&player.pubkey()));
         let transaction = Transaction::new(
             &[&player],
             message,
@@ -1000,7 +1049,7 @@ mod tests {
             processor.clone(),
             &HashSet::new(),
         )
-        .unwrap();
+            .unwrap();
 
         // Execute transaction simulation
         let simulation_result = processor.simulate_transaction_unchecked(
