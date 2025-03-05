@@ -492,6 +492,7 @@ fn process_instruction_inner(
     let instruction_context = transaction_context.get_current_instruction_context()?;
     let instruction_data = instruction_context.get_instruction_data();
     let program_id = instruction_context.get_last_program_key(transaction_context)?;
+    println!("yyy {}", program_id);
     if loader_v4::check_id(program_id) {
         invoke_context.consume_checked(DEFAULT_COMPUTE_UNITS)?;
         match limited_deserialize(instruction_data, solana_packet::PACKET_DATA_SIZE as u64)? {

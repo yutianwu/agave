@@ -33,6 +33,7 @@ solana-version = { workspace = true }
 spl-token-2022 = { workspace = true, features = ["no-entrypoint"] }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["codec", "compat"] }
+backtrace = "0.3.74"
 
 [features]
 dummy-for-ci-check = []

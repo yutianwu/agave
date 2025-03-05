@@ -415,6 +415,7 @@ pub(crate) fn process_instruction_inner(
     if native_loader::check_id(program_account.get_owner()) {
         drop(program_account);
         let program_id = instruction_context.get_last_program_key(transaction_context)?;
+
         return if bpf_loader_upgradeable::check_id(program_id) {
             invoke_context.consume_checked(UPGRADEABLE_LOADER_COMPUTE_UNITS)?;
             process_loader_upgradeable_instruction(invoke_context)

@@ -84,6 +84,8 @@ use {
     },
 };
 
+use std::backtrace;
+
 pub const MAX_REQUEST_BODY_SIZE: usize = 50 * (1 << 10); // 50kB
 
 const EXECUTION_SLOT: u64 = 5; // The execution slot must be greater than the deployment slot
@@ -311,6 +313,20 @@ impl JsonRpcRequestProcessor {
                 solana_bpf_loader_program::Entrypoint::vm,
             ),
         );
+
+        // Add the BPF Loader v2 builtin, for the SPL Token program.
+        transaction_processor.add_builtin(
+            &mock_bank,
+            solana_sdk::bpf_loader::id(),
+            "solana_bpf_loader_program",
+            ProgramCacheEntry::new_builtin(
+                0,
+                b"solana_bpf_loader_program".len(),
+                solana_bpf_loader_program::Entrypoint::vm,
+            ),
+        );
+
+        transaction_processor.fill_missing_sysvar_cache_entries(&mock_bank);
 
         let batch = self.prepare_unlocked_batch_from_single_tx(transaction);
         let LoadAndExecuteTransactionsOutput {
@@ -883,9 +899,9 @@ fn encode_account<T: ReadableAccount>(
 ) -> Result<UiAccount> {
     if (encoding == UiAccountEncoding::Binary || encoding == UiAccountEncoding::Base58)
         && data_slice
-            .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
-            .unwrap_or(account.data().len())
-            > MAX_BASE58_BYTES
+        .map(|s| min(s.length, account.data().len().saturating_sub(s.offset)))
+        .unwrap_or(account.data().len())
+        > MAX_BASE58_BYTES
     {
         let message = format!("Encoded binary (base 58) data should be less than {MAX_BASE58_BYTES} bytes, please use Base64 encoding.");
         Err(error::Error {
@@ -912,11 +928,156 @@ fn sanitize_transaction(
         address_loader,
         reserved_account_keys,
     )
-    .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
+        .map_err(|err| Error::invalid_params(format!("invalid transaction: {err}")))
 }
 
 fn verify_pubkey(input: &str) -> Result<Pubkey> {
     input
         .parse()
         .map_err(|e| Error::invalid_params(format!("Invalid param: {e:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use spl_token_2022::solana_program::bpf_loader_upgradeable;
+    use {
+        super::*,
+        solana_sdk::{
+            instruction::{AccountMeta, Instruction},
+            message::Message,
+            pubkey::Pubkey,
+            signature::{Keypair, Signer},
+            transaction::Transaction,
+        },
+        std::{str::FromStr, fs, path::PathBuf},
+    };
+
+    fn create_test_processor() -> JsonRpcRequestProcessor {
+        let accounts_path = PathBuf::from("/Users/wuzhenxing/Documents/dev/solana/agave/svm/examples/json-rpc/program/accounts-ray.json");
+        let ledger_path = PathBuf::from("");
+
+        let config = JsonRpcConfig {
+            accounts_path,
+            ledger_path,
+            rpc_threads: 1,
+            rpc_niceness_adj: 0,
+            max_request_body_size: Some(MAX_REQUEST_BODY_SIZE),
+        };
+
+        let exit = create_exit(Arc::new(AtomicBool::new(false)));
+        JsonRpcRequestProcessor::new(config, exit)
+    }
+
+    #[test]
+    fn test_simulate_transaction() {
+        let processor = create_test_processor();
+
+        // Create player from base58 private key
+        let player_keypair_str = "x";
+        let player_keypair_bytes = bs58::decode(player_keypair_str)
+            .into_vec()
+            .unwrap();
+        let player = Keypair::from_bytes(&player_keypair_bytes).unwrap();
+
+        // Create instruction data
+        let instruction1_data = bs58::decode("3ipZX7g9NBXycb5v9QjqWwuhh8PxV9WL3HbJRPdURtmm5W1r5t7QtWMbGWB7mQgB8itRgPTMomJoFW7k4WhmYdYLDyWW5WMHN9M2TPGB2xFoTt3tkD87ECGUXNUzp7WskoNcjTtM9nVZMxZDcAGN1GAD82P9vhnSsQKiE5Kh2").into_vec().unwrap();
+        let instruction1 = Instruction::new_with_bytes(
+            Pubkey::from_str("11111111111111111111111111111111").unwrap(),
+            &instruction1_data,
+            vec![
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new(Pubkey::from_str("JBxmvDYWetwnND8z1ppEuVWpXjpds77J2DgR2hD4Qmhg").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("JBxmvDYWetwnND8z1ppEuVWpXjpds77J2DgR2hD4Qmhg").unwrap(), false),
+            ],
+        );
+
+        let instruction2_data = bs58::decode("2").into_vec().unwrap();
+        let instruction2 = Instruction::new_with_bytes(
+            Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+            &instruction2_data,
+            vec![
+                AccountMeta::new(Pubkey::from_str("JBxmvDYWetwnND8z1ppEuVWpXjpds77J2DgR2hD4Qmhg").unwrap(), false),
+                AccountMeta::new_readonly(Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new_readonly(Pubkey::from_str("SysvarRent111111111111111111111111111111111").unwrap(), false),
+            ],
+        );
+
+        let instruction3_data = bs58::decode("6FL8fBmJqzqeUnA28wVdrto").into_vec().unwrap();
+        let instruction3 = Instruction::new_with_bytes(
+            Pubkey::from_str("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap(),
+            &instruction3_data,
+            vec![
+                AccountMeta::new_readonly(Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("A3TiDsQgQFKSLXcj51Jiigm4Fd4F27GGrsXAsHaXh3E1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("EvFmWAGp82Kfenmh8xFzSBGYChtmWXmqqTK9QSWW9BqB").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("A9M4vMERK54sEpGefBVnvxJhJRa9U6tUGbkYgYbjci1B").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("EvFmWAGp82Kfenmh8xFzSBGYChtmWXmqqTK9QSWW9BqB").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("A9M4vMERK54sEpGefBVnvxJhJRa9U6tUGbkYgYbjci1B").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("JBxmvDYWetwnND8z1ppEuVWpXjpds77J2DgR2hD4Qmhg").unwrap(), false),
+                // AccountMeta::new(Pubkey::from_str("14ryLxgtBbjF6RvdkPb8z4c3R46Dj5WprCVAGtW7EzpN").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("Cg1sa7AgfqVTQYREXGv4KwB9qBq5ymNddGTd1CdShjxZ").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+            ],
+        );
+
+        let instruction4_data = bs58::decode("A").into_vec().unwrap();
+        let instruction4 = Instruction::new_with_bytes(
+            Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap(),
+            &instruction4_data,
+            vec![
+                AccountMeta::new(Pubkey::from_str("JBxmvDYWetwnND8z1ppEuVWpXjpds77J2DgR2hD4Qmhg").unwrap(), false),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+                AccountMeta::new(Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap(), true),
+            ],
+        );
+
+        // Create transaction
+        let message = Message::new(&[instruction1, instruction2,
+            instruction3, instruction4], Some(&player.pubkey()));
+        let transaction = Transaction::new(
+            &[&player],
+            message,
+            Hash::default(),
+        );
+
+        // Convert to sanitized transaction
+        let sanitized_transaction = SanitizedTransaction::try_create(
+            transaction.into(),
+            MessageHash::Compute,
+            None,
+            processor.clone(),
+            &HashSet::new(),
+        )
+            .unwrap();
+
+        // Execute transaction simulation
+        let simulation_result = processor.simulate_transaction_unchecked(
+            &sanitized_transaction,
+            true, // Enable CPI recording
+        );
+
+        // Print logs for debugging
+        println!("Simulation logs: {:?}", simulation_result.logs);
+
+        for log in  &simulation_result.logs {
+            println!("{}", log);
+        }
+
+        println!("Simulation result: {:?}", simulation_result.result);
+
+        // Verify results
+        assert!(simulation_result.result.is_ok(), "Transaction simulation failed");
+        assert!(!simulation_result.logs.is_empty(), "Expected logs to be present");
+    }
 }

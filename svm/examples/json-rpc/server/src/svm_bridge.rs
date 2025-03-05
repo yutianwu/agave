@@ -38,6 +38,7 @@ use {
         time::{SystemTime, UNIX_EPOCH},
     },
 };
+use solana_bpf_loader_program::syscalls::{create_program_runtime_environment_v1, SyscallCreateProgramAddress, SyscallGetRentSysvar, SyscallHash, SyscallMemcmp, SyscallMemmove, SyscallTryFindProgramAddress};
 
 const DEPLOYMENT_SLOT: u64 = 0;
 const DEPLOYMENT_EPOCH: u64 = 0;
@@ -97,7 +98,7 @@ impl TransactionProcessingCallback for MockBankCallback {
 impl MockBankCallback {
     pub fn new(account_map: Vec<(Pubkey, AccountSharedData)>) -> Self {
         Self {
-            feature_set: Arc::new(FeatureSet::default()),
+            feature_set: Arc::new(FeatureSet::all_enabled()),
             account_shared_data: RwLock::new(HashMap::from_iter(account_map)),
         }
     }
@@ -156,7 +157,7 @@ pub fn create_custom_environment<'a>() -> BuiltinProgram<InvokeContext<'a>> {
         sanitize_user_provided_values: true,
         enabled_sbpf_versions: SBPFVersion::V0..=SBPFVersion::V3,
         optimize_rodata: false,
-        aligned_memory_mapping: true,
+        aligned_memory_mapping: false,
     };
 
     // Register system calls that the compiled contract calls during execution.
@@ -166,6 +167,24 @@ pub fn create_custom_environment<'a>() -> BuiltinProgram<InvokeContext<'a>> {
         .expect("Registration failed");
     loader
         .register_function("sol_log_", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_log_data", SyscallLog::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_memcmp_", SyscallMemcmp::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_get_rent_sysvar", SyscallGetRentSysvar::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_try_find_program_address", SyscallTryFindProgramAddress::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_memmove_", SyscallMemmove::vm)
+        .expect("Registration failed");
+    loader
+        .register_function("sol_create_program_address", SyscallCreateProgramAddress::vm)
         .expect("Registration failed");
     loader
         .register_function("sol_log_64_", SyscallLogU64::vm)
@@ -202,8 +221,13 @@ pub fn create_executable_environment(
 ) {
     let mut program_cache = transaction_processor.program_cache.write().unwrap();
 
+
+    let program_runtime_environment =
+        create_program_runtime_environment_v1(&mock_bank.feature_set, &ComputeBudget::default(), true, false)
+            .unwrap();
+
     program_cache.environments = ProgramRuntimeEnvironments {
-        program_runtime_v1: Arc::new(create_custom_environment()),
+        program_runtime_v1: Arc::new(program_runtime_environment),
         // We are not using program runtime v2
         program_runtime_v2: Arc::new(BuiltinProgram::new_loader(Config::default())),
     };

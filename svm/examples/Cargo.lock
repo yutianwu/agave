@@ -2680,6 +2680,7 @@ dependencies = [
 name = "json-rpc-server"
 version = "2.3.0"
 dependencies = [
+ "backtrace",
  "base64 0.22.1",
  "bincode",
  "bs58",

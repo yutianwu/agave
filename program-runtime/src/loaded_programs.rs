@@ -742,6 +742,7 @@ impl ProgramCacheForTxBatch {
         key: Pubkey,
         entry: Arc<ProgramCacheEntry>,
     ) -> (bool, Arc<ProgramCacheEntry>) {
+        println!("insert, {}", key);
         (self.entries.insert(key, entry.clone()).is_some(), entry)
     }
 
