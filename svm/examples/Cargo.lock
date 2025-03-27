@@ -7732,11 +7732,15 @@ name = "solana-svm"
 version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
+ "base64 0.21.7",
+ "chrono",
  "itertools 0.12.1",
+ "lazy_static",
  "log",
  "percentage",
  "serde",
  "serde_derive",
+ "serde_json",
  "solana-account",
  "solana-bpf-loader-program",
  "solana-clock",

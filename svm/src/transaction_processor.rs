@@ -519,6 +519,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         error_counters: &mut TransactionErrorMetrics,
         callbacks: &CB,
     ) -> TransactionResult<ValidatedTransactionDetails> {
+
         // If this is a nonce transaction, validate the nonce info.
         // This must be done for every transaction to support SIMD83 because
         // it may have changed due to use, authorization, or deallocation.
@@ -574,7 +575,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         })?;
 
         let fee_payer_address = message.fee_payer();
-
+        println!("validate_transaction_fee_payer {}", fee_payer_address);
         let Some(mut loaded_fee_payer) = account_loader.load_account(fee_payer_address, true)
         else {
             error_counters.account_not_found += 1;
@@ -644,6 +645,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
         // or a fake nonce account. We must also check the signer in case the authority was changed.
         //
         // Note these checks are *not* obviated by fee-only transactions.
+        println!("validate_transaction_nonce {}", nonce_info.address());
         let nonce_is_valid = account_loader
             .load_account(nonce_info.address(), true)
             .and_then(|loaded_nonce| {
@@ -734,6 +736,8 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             program_accounts_map
                 .iter()
                 .map(|(pubkey, (_, count))| {
+
+                    println!("Missing program account : {}", pubkey);
                     let match_criteria = if check_program_modification_slot {
                         get_program_modification_slot(callback, pubkey)
                             .map_or(ProgramCacheMatchCriteria::Tombstone, |slot| {
@@ -769,6 +773,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
 
                 let program_to_store = program_to_load.map(|(key, count)| {
                     // Load, verify and compile one program.
+                    println!("Program account : {}", key);
                     let program = load_program_with_pubkey(
                         callback,
                         &program_cache.get_environments_for_epoch(self.epoch),
@@ -788,6 +793,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
             };
 
             if let Some((key, program)) = program_to_store {
+                println!("Program program_to_store : {}", key);
                 loaded_programs_for_txs.as_mut().unwrap().loaded_missing = true;
                 let mut program_cache = self.program_cache.write().unwrap();
                 // Submit our last completed loading task.
@@ -1150,6 +1156,7 @@ impl<FG: ForkGraph> TransactionBatchProcessor<FG> {
     ) {
         let mut sysvar_cache = self.sysvar_cache.write().unwrap();
         sysvar_cache.fill_missing_entries(|pubkey, set_sysvar| {
+            println!("fill_missing_sysvar_cache_entries: {}", pubkey);
             if let Some(account) = callbacks.get_account_shared_data(pubkey) {
                 set_sysvar(account.data());
             }

@@ -328,7 +328,11 @@ impl JsonRpcRequestProcessor {
 
         transaction_processor.fill_missing_sysvar_cache_entries(&mock_bank);
 
+        println!("start process transaction------------------->");
         let batch = self.prepare_unlocked_batch_from_single_tx(transaction);
+
+        println!("start process transaction---------------------------------->");
+
         let LoadAndExecuteTransactionsOutput {
             mut processing_results,
             ..
@@ -353,6 +357,7 @@ impl JsonRpcRequestProcessor {
                 transaction_account_lock_limit: Some(64),
             },
         );
+        println!("end process transaction---------------------------------->");
 
         let processing_result = processing_results
             .pop()
@@ -973,8 +978,10 @@ mod tests {
     fn test_simulate_transaction() {
         let processor = create_test_processor();
 
+        let signer = Pubkey::from_str("H7GCUaJMUgdQiNYyoQTTmwG4fSYMV8W8ECmATZ2kyNTJ").unwrap();
+        
         // Create player from base58 private key
-        let player_keypair_str = "x";
+        let player_keypair_str = "2jDrznQF1ovNSnqfqRLVfnxHsynyFtvNVkax3ZjeN6mLfTrCB1yPrfVFjXks81augWtk6GFiakHmhwX29DAYBEv4";
         let player_keypair_bytes = bs58::decode(player_keypair_str)
             .into_vec()
             .unwrap();

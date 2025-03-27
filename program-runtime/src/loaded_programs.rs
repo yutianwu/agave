@@ -903,7 +903,7 @@ impl<FG: ForkGraph> ProgramCache<FG> {
                             ) => {}
                             _ => {
                                 // Something is wrong, I can feel it ...
-                                error!("ProgramCache::assign_program() failed key={:?} existing={:?} entry={:?}", key, slot_versions, entry);
+                                println!("ProgramCache::assign_program() failed key={:?} existing={:?} entry={:?}", key, slot_versions, entry);
                                 debug_assert!(false, "Unexpected replacement of an entry");
                                 self.stats.replacements.fetch_add(1, Ordering::Relaxed);
                                 return true;
@@ -1069,6 +1069,7 @@ impl<FG: ForkGraph> ProgramCache<FG> {
                 loading_entries,
             } => {
                 search_for.retain(|(key, (match_criteria, usage_count))| {
+                    println!("search_for {}", key);
                     if let Some(second_level) = entries.get(key) {
                         for entry in second_level.iter().rev() {
                             if entry.deployment_slot <= self.latest_root_slot

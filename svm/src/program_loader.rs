@@ -66,8 +66,9 @@ pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
     callbacks: &CB,
     pubkey: &Pubkey,
 ) -> Option<ProgramAccountLoadResult> {
+    println!("load_program_accounts: {}", pubkey);
     let program_account = callbacks.get_account_shared_data(pubkey)?;
-
+    println!("444");
     if loader_v4::check_id(program_account.owner()) {
         return Some(
             solana_loader_v4_program::get_state(program_account.data())
@@ -81,19 +82,22 @@ pub(crate) fn load_program_accounts<CB: TransactionProcessingCallback>(
                 )),
         );
     }
-
+    println!("111");
     if bpf_loader_deprecated::check_id(program_account.owner()) {
         return Some(ProgramAccountLoadResult::ProgramOfLoaderV1(program_account));
     }
+    println!("222");
 
     if bpf_loader::check_id(program_account.owner()) {
         return Some(ProgramAccountLoadResult::ProgramOfLoaderV2(program_account));
     }
+    println!("333");
 
     if let Ok(UpgradeableLoaderState::Program {
         programdata_address,
     }) = program_account.state()
     {
+        println!("programdata_address: {:?}", programdata_address);
         if let Some(programdata_account) = callbacks.get_account_shared_data(&programdata_address) {
             if let Ok(UpgradeableLoaderState::ProgramData {
                 slot,
@@ -131,7 +135,7 @@ pub(crate) fn load_program_with_pubkey<CB: TransactionProcessingCallback>(
         program_id: pubkey.to_string(),
         ..LoadProgramMetrics::default()
     };
-
+    println!("load_program_with_pubkey: {}", pubkey);
     let loaded_program = match load_program_accounts(callbacks, pubkey)? {
         ProgramAccountLoadResult::InvalidAccountData(owner) => Ok(
             ProgramCacheEntry::new_tombstone(slot, owner, ProgramCacheEntryType::Closed),

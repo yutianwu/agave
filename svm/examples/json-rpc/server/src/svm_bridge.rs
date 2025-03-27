@@ -78,11 +78,22 @@ impl TransactionProcessingCallback for MockBankCallback {
             "Get account {pubkey} shared data, thread {:?}",
             std::thread::current().name()
         );
-        self.account_shared_data
+        println!("call back: {}", pubkey);
+        if let Some(account) = self.account_shared_data
             .read()
             .unwrap()
             .get(pubkey)
-            .cloned()
+            .cloned() {
+            println!("Account info:");
+            println!("  lamports: {}", account.lamports());
+            println!("  owner: {}", account.owner());
+            println!("  executable: {}", account.executable());
+            println!("  rent_epoch: {}", account.rent_epoch());
+            println!("  data length: {}", account.data().len());
+            Some(account)
+        } else {
+            None
+        }
     }
 
     fn add_builtin_account(&self, name: &str, program_id: &Pubkey) {
@@ -239,19 +250,21 @@ pub fn create_executable_environment(
             if account.executable() && *account.owner() == solana_sdk::bpf_loader_upgradeable::id()
             {
                 let data = account.data();
-                let program_data_account_key = Pubkey::try_from(data[4..].to_vec()).unwrap();
-                let program_data_account = mock_bank
-                    .get_account_shared_data(&program_data_account_key)
-                    .unwrap();
-                let program_data = program_data_account.data();
-                let elf_bytes = program_data[45..].to_vec();
+                if data.len() < 4 {
+                    continue;
+                }
 
-                let program_runtime_environment =
-                    program_cache.environments.program_runtime_v1.clone();
-                program_cache.assign_program(
-                    *key,
-                    Arc::new(
-                        ProgramCacheEntry::new(
+                if let Ok(program_data_account_key) = Pubkey::try_from(data[4..].to_vec()) {
+                    if let Some(program_data_account) = mock_bank.get_account_shared_data(&program_data_account_key) {
+                        let program_data = program_data_account.data();
+                        if program_data.len() < 45 {
+                            continue;
+                        }
+
+                        let elf_bytes = program_data[45..].to_vec();
+                        let program_runtime_environment = program_cache.environments.program_runtime_v1.clone();
+
+                        if let Ok(program_cache_entry) = ProgramCacheEntry::new(
                             &solana_sdk::bpf_loader_upgradeable::id(),
                             program_runtime_environment,
                             0,
@@ -259,10 +272,11 @@ pub fn create_executable_environment(
                             &elf_bytes,
                             elf_bytes.len(),
                             &mut LoadProgramMetrics::default(),
-                        )
-                        .unwrap(),
-                    ),
-                );
+                        ) {
+                            program_cache.assign_program(*key, Arc::new(program_cache_entry));
+                        }
+                    }
+                }
             }
         }
     }

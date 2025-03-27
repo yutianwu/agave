@@ -34,9 +34,40 @@ use {
     solana_transaction_error::{TransactionError, TransactionResult as Result},
     std::{
         num::{NonZeroU32, Saturating},
-        sync::Arc,
+        sync::{Arc, Mutex},
+        fs::{File, OpenOptions},
+        io::{Write, BufWriter},
+        path::PathBuf,
     },
 };
+use solana_svm_transaction::svm_transaction::SVMTransaction;
+use chrono::Local;
+use lazy_static::lazy_static;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use std::collections::VecDeque;
+
+lazy_static! {
+    static ref ACCOUNT_LOADER_LOG: Mutex<Option<BufWriter<File>>> = {
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let log_dir = PathBuf::from("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        
+        let log_path = log_dir.join(format!("account_loader_{}.log", timestamp));
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(log_path)
+            .ok();
+            
+        Mutex::new(file.map(BufWriter::new))
+    };
+
+    static ref ACCOUNTS_BUFFER: Mutex<VecDeque<Value>> = Mutex::new(VecDeque::new());
+}
 
 // for the load instructions
 pub(crate) type TransactionRent = u64;
@@ -173,6 +204,7 @@ impl<'a, CB: TransactionProcessingCallback> AccountLoader<'a, CB> {
         account_key: &Pubkey,
         is_writable: bool,
     ) -> Option<LoadedTransactionAccount> {
+        println!("load_account {:?}", &account_key);
         let account = if let Some(account) = self.account_cache.get(account_key) {
             // If lamports is 0, a previous transaction deallocated this account.
             // We return None instead of the account we found so it can be created fresh.
@@ -363,7 +395,7 @@ pub fn validate_fee_payer(
 
 pub(crate) fn load_transaction<CB: TransactionProcessingCallback>(
     account_loader: &mut AccountLoader<CB>,
-    message: &impl SVMMessage,
+    message: &impl SVMTransaction,
     validation_result: TransactionValidationResult,
     error_metrics: &mut TransactionErrorMetrics,
     rent_collector: &dyn SVMRentCollector,
@@ -412,12 +444,15 @@ struct LoadedTransactionAccounts {
 
 fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     account_loader: &mut AccountLoader<CB>,
-    message: &impl SVMMessage,
+    message: &impl SVMTransaction,
     loaded_fee_payer_account: LoadedTransactionAccount,
     compute_budget_limits: &ComputeBudgetLimits,
     error_metrics: &mut TransactionErrorMetrics,
     rent_collector: &dyn SVMRentCollector,
 ) -> Result<LoadedTransactionAccounts> {
+    let signature = message.signature();
+    println!("signature: {}", signature);
+
     let mut tx_rent: TransactionRent = 0;
     let account_keys = message.account_keys();
     let mut accounts = Vec::with_capacity(account_keys.len());
@@ -425,12 +460,74 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     let mut rent_debits = RentDebits::default();
     let mut accumulated_accounts_data_size: Saturating<u32> = Saturating(0);
 
-    let mut collect_loaded_account = |key, loaded_account| -> Result<()> {
+    // Create local buffer for account collection
+    let mut accounts_buffer = VecDeque::new();
+
+    // Create local log file
+    let log_dir = PathBuf::from("accounts");
+    std::fs::create_dir_all(&log_dir).ok();
+
+    let log_path = log_dir.join(format!("transaction_accounts_{}.log", signature));
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .ok()
+        .map(BufWriter::new);
+
+    let mut collect_loaded_account = |key: &Pubkey, loaded_account: LoadedTransactionAccount, account_loader: &mut AccountLoader<CB>| -> Result<()> {
         let LoadedTransactionAccount {
             account,
             loaded_size,
             rent_collected,
         } = loaded_account;
+
+        // Collect account information to local buffer
+        let account_json = json!({
+            "pubkey": key.to_string(),
+            "account": {
+                "data": [
+                    STANDARD.encode(account.data()),
+                    "base64"
+                ],
+                "executable": account.executable(),
+                "lamports": account.lamports(),
+                "owner": account.owner().to_string(),
+                "rentEpoch": account.rent_epoch(),
+                "space": account.data().len()
+            }
+        });
+
+        // If it's an upgradeable program account, collect its program data account information
+        if account.executable() && *account.owner() == solana_sdk::bpf_loader_upgradeable::id() {
+            let data = account.data();
+            if data.len() >= 4 {
+                if let Ok(program_data_account_key) = Pubkey::try_from(data[4..].to_vec()) {
+                    if let Some(program_data_account) = account_loader.callbacks.get_account_shared_data(&program_data_account_key) {
+                        let program_data = program_data_account.data();
+                        if program_data.len() >= 45 {
+                            accounts_buffer.push_back(json!({
+                                "pubkey": program_data_account_key.to_string(),
+                                "account": {
+                                    "data": [
+                                        STANDARD.encode(&program_data),
+                                        "base64"
+                                    ],
+                                    "executable": program_data_account.executable(),
+                                    "lamports": program_data_account.lamports(),
+                                    "owner": program_data_account.owner().to_string(),
+                                    "rentEpoch": program_data_account.rent_epoch(),
+                                    "space": program_data_account.data().len()
+                                }
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        accounts_buffer.push_back(account_json);
 
         accumulate_and_check_loaded_account_data_size(
             &mut accumulated_accounts_data_size,
@@ -448,7 +545,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
 
     // Since the fee payer is always the first account, collect it first.
     // We can use it directly because it was already loaded during validation.
-    collect_loaded_account(message.fee_payer(), loaded_fee_payer_account)?;
+    collect_loaded_account(message.fee_payer(), loaded_fee_payer_account, account_loader)?;
 
     // Attempt to load and collect remaining non-fee payer accounts
     for (account_index, account_key) in account_keys.iter().enumerate().skip(1) {
@@ -459,7 +556,8 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
             account_index,
             rent_collector,
         );
-        collect_loaded_account(account_key, loaded_account)?;
+
+        collect_loaded_account(account_key, loaded_account, account_loader)?;
     }
 
     let program_indices = message
@@ -472,6 +570,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
 
             let program_index = instruction.program_id_index as usize;
 
+            println!("475 load account: {}", program_id);
             let Some(LoadedTransactionAccount {
                 account: program_account,
                 ..
@@ -497,22 +596,7 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
             }
 
             if !validated_loaders.contains(owner_id) {
-                // NOTE there are several feature gate activations that affect this code:
-                // * `remove_accounts_executable_flag_checks`: this implicitly makes system, vote, stake, et al valid loaders
-                //   it is impossible to mark an account executable and also have it be owned by one of them
-                //   so, with the feature disabled, we always fail the executable check if they are a program id owner
-                //   however, with the feature enabled, any account owned by an account owned by native loader is a "program"
-                //   this is benign (any such transaction will fail at execution) but it affects which transactions pay fees
-                // * `enable_transaction_loading_failure_fees`: loading failures behave the same as execution failures
-                //   at this point we can restrict valid loaders to those contained in `PROGRAM_OWNERS`
-                //   since any other pseudo-loader owner is destined to fail at execution
-                // * SIMD-186: explicitly defines a sensible transaction data size algorithm
-                //   at this point we stop counting loaders toward transaction data size entirely
-                //
-                // when _all three_ of `remove_accounts_executable_flag_checks`, `enable_transaction_loading_failure_fees`,
-                // and SIMD-186 are active, we do not need to load loaders at all to comply with consensus rules
-                // we may verify program ids are owned by `PROGRAM_OWNERS` purely as an optimization
-                // this could even be done before loading the rest of the accounts for a transaction
+                println!("522 load account: {}", owner_id);
                 if let Some(LoadedTransactionAccount {
                     account: owner_account,
                     loaded_size: owner_size,
@@ -544,6 +628,17 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
         })
         .collect::<Result<Vec<Vec<IndexOfAccount>>>>()?;
 
+    // Write all account information to file at the end of the function
+    if let Some(file) = log_file.as_mut() {
+        let accounts_array: Vec<Value> = accounts_buffer.drain(..).collect();
+        let json_output = json!({
+            "accounts": accounts_array
+        });
+        // Use to_string_pretty to format JSON output
+        writeln!(file, "{}", serde_json::to_string_pretty(&json_output).unwrap()).ok();
+        file.flush().ok();
+    }
+
     Ok(LoadedTransactionAccounts {
         accounts,
         program_indices,
@@ -560,6 +655,7 @@ fn load_transaction_account<CB: TransactionProcessingCallback>(
     account_index: usize,
     rent_collector: &dyn SVMRentCollector,
 ) -> LoadedTransactionAccount {
+    println!("load_transaction_account: {}", account_key);
     let is_writable = message.is_writable(account_index);
     let loaded_account = if solana_sdk_ids::sysvar::instructions::check_id(account_key) {
         // Since the instructions sysvar is constructed by the SVM and modified

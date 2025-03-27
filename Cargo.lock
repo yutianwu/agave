@@ -9961,7 +9961,9 @@ version = "2.3.0"
 dependencies = [
  "ahash 0.8.11",
  "assert_matches",
+ "base64 0.21.7",
  "bincode",
+ "chrono",
  "ed25519-dalek",
  "itertools 0.12.1",
  "lazy_static",
@@ -9974,6 +9976,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "serde_derive",
+ "serde_json",
  "shuttle",
  "solana-account",
  "solana-bpf-loader-program",
