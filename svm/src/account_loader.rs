@@ -48,6 +48,9 @@ use std::collections::HashMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::collections::VecDeque;
+use mysql::*;
+use mysql::prelude::*;
+use std::sync::Once;
 
 lazy_static! {
     static ref ACCOUNT_LOADER_LOG: Mutex<Option<BufWriter<File>>> = {
@@ -442,6 +445,47 @@ struct LoadedTransactionAccounts {
     pub(crate) loaded_accounts_data_size: u32,
 }
 
+static INIT: Once = Once::new();
+static mut MYSQL_POOL: Option<Pool> = None;
+
+fn init_mysql_pool() {
+    let url = "mysql://root:12345678@localhost:3306/solana_accounts";
+    unsafe {
+        MYSQL_POOL = Some(Pool::new(url).unwrap());
+    }
+}
+
+fn get_mysql_pool() -> &'static Pool {
+    unsafe {
+        INIT.call_once(|| {
+            init_mysql_pool();
+        });
+        MYSQL_POOL.as_ref().unwrap()
+    }
+}
+
+fn init_tables(pool: &Pool) {
+    let mut conn = pool.get_conn().unwrap();
+
+    // Create accounts table with tx_signature and composite unique key
+    conn.query_drop(
+        r"CREATE TABLE IF NOT EXISTS accounts (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            tx_signature VARCHAR(88) NOT NULL,
+            pubkey VARCHAR(44) NOT NULL,
+            data LONGTEXT NOT NULL,
+            executable BOOLEAN NOT NULL,
+            lamports BIGINT UNSIGNED NOT NULL,
+            owner VARCHAR(44) NOT NULL,
+            rent_epoch BIGINT UNSIGNED NOT NULL,
+            space INT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unique_tx_pubkey (tx_signature, pubkey)
+        )"
+    ).unwrap();
+}
+
 fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     account_loader: &mut AccountLoader<CB>,
     message: &impl SVMTransaction,
@@ -453,28 +497,17 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
     let signature = message.signature();
     println!("signature: {}", signature);
 
+    // Initialize MySQL connection
+    let pool = get_mysql_pool();
+    init_tables(pool);
+    let mut conn = pool.get_conn().unwrap();
+
     let mut tx_rent: TransactionRent = 0;
     let account_keys = message.account_keys();
     let mut accounts = Vec::with_capacity(account_keys.len());
     let mut validated_loaders = AHashSet::with_capacity(PROGRAM_OWNERS.len());
     let mut rent_debits = RentDebits::default();
     let mut accumulated_accounts_data_size: Saturating<u32> = Saturating(0);
-
-    // Create local buffer for account collection
-    let mut accounts_buffer = VecDeque::new();
-
-    // Create local log file
-    let log_dir = PathBuf::from("accounts");
-    std::fs::create_dir_all(&log_dir).ok();
-
-    let log_path = log_dir.join(format!("transaction_accounts_{}.log", signature));
-    let mut log_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(log_path)
-        .ok()
-        .map(BufWriter::new);
 
     let mut collect_loaded_account = |key: &Pubkey, loaded_account: LoadedTransactionAccount, account_loader: &mut AccountLoader<CB>| -> Result<()> {
         let LoadedTransactionAccount {
@@ -483,21 +516,28 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
             rent_collected,
         } = loaded_account;
 
-        // Collect account information to local buffer
-        let account_json = json!({
-            "pubkey": key.to_string(),
-            "account": {
-                "data": [
-                    STANDARD.encode(account.data()),
-                    "base64"
-                ],
-                "executable": account.executable(),
-                "lamports": account.lamports(),
-                "owner": account.owner().to_string(),
-                "rentEpoch": account.rent_epoch(),
-                "space": account.data().len()
-            }
-        });
+        // Insert or update account in MySQL
+        conn.exec_drop(
+            r"INSERT INTO accounts (tx_signature, pubkey, data, executable, lamports, owner, rent_epoch, space)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+              ON DUPLICATE KEY UPDATE
+              data = VALUES(data),
+              executable = VALUES(executable),
+              lamports = VALUES(lamports),
+              owner = VALUES(owner),
+              rent_epoch = VALUES(rent_epoch),
+              space = VALUES(space)",
+            (
+                signature.to_string(),
+                key.to_string(),
+                STANDARD.encode(account.data()),
+                account.executable(),
+                account.lamports().to_string(),
+                account.owner().to_string(),
+                account.rent_epoch().to_string(),
+                account.data().len()
+            )
+        ).unwrap();
 
         // If it's an upgradeable program account, collect its program data account information
         if account.executable() && *account.owner() == solana_sdk::bpf_loader_upgradeable::id() {
@@ -507,27 +547,33 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
                     if let Some(program_data_account) = account_loader.callbacks.get_account_shared_data(&program_data_account_key) {
                         let program_data = program_data_account.data();
                         if program_data.len() >= 45 {
-                            accounts_buffer.push_back(json!({
-                                "pubkey": program_data_account_key.to_string(),
-                                "account": {
-                                    "data": [
-                                        STANDARD.encode(&program_data),
-                                        "base64"
-                                    ],
-                                    "executable": program_data_account.executable(),
-                                    "lamports": program_data_account.lamports(),
-                                    "owner": program_data_account.owner().to_string(),
-                                    "rentEpoch": program_data_account.rent_epoch(),
-                                    "space": program_data_account.data().len()
-                                }
-                            }));
+                            // Store program data account in MySQL
+                            conn.exec_drop(
+                                r"INSERT INTO accounts (tx_signature, pubkey, data, executable, lamports, owner, rent_epoch, space)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  ON DUPLICATE KEY UPDATE
+                                  data = VALUES(data),
+                                  executable = VALUES(executable),
+                                  lamports = VALUES(lamports),
+                                  owner = VALUES(owner),
+                                  rent_epoch = VALUES(rent_epoch),
+                                  space = VALUES(space)",
+                                (
+                                    signature.to_string(),
+                                    program_data_account_key.to_string(),
+                                    STANDARD.encode(program_data),
+                                    program_data_account.executable(),
+                                    program_data_account.lamports().to_string(),
+                                    program_data_account.owner().to_string(),
+                                    program_data_account.rent_epoch().to_string(),
+                                    program_data_account.data().len()
+                                )
+                            ).unwrap();
                         }
                     }
                 }
             }
         }
-
-        accounts_buffer.push_back(account_json);
 
         accumulate_and_check_loaded_account_data_size(
             &mut accumulated_accounts_data_size,
@@ -627,17 +673,6 @@ fn load_transaction_accounts<CB: TransactionProcessingCallback>(
             Ok(account_indices)
         })
         .collect::<Result<Vec<Vec<IndexOfAccount>>>>()?;
-
-    // Write all account information to file at the end of the function
-    if let Some(file) = log_file.as_mut() {
-        let accounts_array: Vec<Value> = accounts_buffer.drain(..).collect();
-        let json_output = json!({
-            "accounts": accounts_array
-        });
-        // Use to_string_pretty to format JSON output
-        writeln!(file, "{}", serde_json::to_string_pretty(&json_output).unwrap()).ok();
-        file.flush().ok();
-    }
 
     Ok(LoadedTransactionAccounts {
         accounts,
