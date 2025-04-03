@@ -1502,55 +1502,65 @@ use std::fmt;
 // Simple MySQL account storage implementation
 lazy_static! {
     // List of account pubkeys to store in MySQL
-    static ref ACCOUNTS_TO_STORE: Mutex<Vec<Pubkey>> = Mutex::new(Vec::new());
-    // MySQL connection pool
-    static ref MYSQL_POOL: Mutex<Option<Pool>> = Mutex::new(None);
-}
-
-/// Initialize MySQL connection pool
-pub fn init_mysql_connection() {
-    if let Ok(url) = env::var("MYSQL_CONNECTION_URL") {
-        match Opts::from_url(&url) {
-            Ok(opts) => {
-                match Pool::new(opts) {
-                    Ok(pool) => {
-                        // Create the accounts table if it doesn't exist
-                        if let Ok(mut conn) = pool.get_conn() {
-                            let create_table_result = conn.query_drop(
-                                r"CREATE TABLE IF NOT EXISTS accounts (
-                                    pubkey VARCHAR(44) NOT NULL,
-                                    block_height BIGINT NOT NULL,
-                                    lamports BIGINT NOT NULL,
-                                    owner VARCHAR(44) NOT NULL,
-                                    executable BOOLEAN NOT NULL,
-                                    rent_epoch BIGINT NOT NULL,
-                                    data LONGTEXT,
-                                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                                    PRIMARY KEY (block_height, pubkey)
-                                )"
-                            );
-                            
-                            if let Err(err) = create_table_result {
-                                warn!("Failed to create accounts table: {}", err);
-                                return;
-                            }
-                        } else {
-                            warn!("Failed to get MySQL connection");
-                            return;
-                        }
-                        
-                        let mut mysql_pool = MYSQL_POOL.lock().unwrap();
-                        *mysql_pool = Some(pool);
-                        info!("MySQL connection initialized successfully");
-                    }
-                    Err(err) => warn!("Failed to create MySQL connection pool: {}", err),
+    static ref ACCOUNTS_TO_STORE: Mutex<Vec<Pubkey>> = {
+        let mut accounts = Vec::new();
+        if let Ok(accounts_str) = env::var("MYSQL_ACCOUNTS_TO_STORE") {
+            for pubkey_str in accounts_str.split(',') {
+                if let Ok(pubkey) = pubkey_str.trim().parse::<Pubkey>() {
+                    accounts.push(pubkey);
+                } else {
+                    warn!("Invalid pubkey format: {}", pubkey_str);
                 }
             }
-            Err(err) => warn!("Failed to parse MySQL URL: {}", err),
+            info!("Initialized {} accounts to store in MySQL", accounts.len());
         }
-    } else {
-        info!("MYSQL_CONNECTION_URL not set, MySQL storage disabled");
-    }
+        Mutex::new(accounts)
+    };
+    
+    // MySQL connection pool
+    static ref MYSQL_POOL: Mutex<Option<Pool>> = {
+        let mut pool = None;
+        if let Ok(url) = env::var("MYSQL_CONNECTION_URL") {
+            match Opts::from_url(&url) {
+                Ok(opts) => {
+                    match Pool::new(opts) {
+                        Ok(new_pool) => {
+                            // Create the accounts table if it doesn't exist
+                            if let Ok(mut conn) = new_pool.get_conn() {
+                                let create_table_result = conn.query_drop(
+                                    r"CREATE TABLE IF NOT EXISTS accounts (
+                                        pubkey VARCHAR(44) NOT NULL,
+                                        block_height BIGINT NOT NULL,
+                                        lamports BIGINT NOT NULL,
+                                        owner VARCHAR(44) NOT NULL,
+                                        executable BOOLEAN NOT NULL,
+                                        rent_epoch BIGINT NOT NULL,
+                                        data LONGTEXT,
+                                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                        PRIMARY KEY (block_height, pubkey)
+                                    )"
+                                );
+                                
+                                if let Err(err) = create_table_result {
+                                    warn!("Failed to create accounts table: {}", err);
+                                } else {
+                                    pool = Some(new_pool);
+                                    info!("MySQL connection initialized successfully");
+                                }
+                            } else {
+                                warn!("Failed to get MySQL connection");
+                            }
+                        }
+                        Err(err) => warn!("Failed to create MySQL connection pool: {}", err),
+                    }
+                }
+                Err(err) => warn!("Failed to parse MySQL URL: {}", err),
+            }
+        } else {
+            info!("MYSQL_CONNECTION_URL not set, MySQL storage disabled");
+        }
+        Mutex::new(pool)
+    };
 }
 
 /// Store accounts in MySQL
@@ -1637,23 +1647,7 @@ pub fn store_accounts_in_mysql(block_height: u64, pubkeys: &[Pubkey], get_accoun
     }
 }
 
-// Initialize the accounts to store from environment variable
-pub fn init_accounts_to_store() {
-    if let Ok(accounts_str) = env::var("MYSQL_ACCOUNTS_TO_STORE") {
-        let mut accounts = ACCOUNTS_TO_STORE.lock().unwrap();
-        for pubkey_str in accounts_str.split(',') {
-            if let Ok(pubkey) = pubkey_str.trim().parse::<Pubkey>() {
-                accounts.push(pubkey);
-            } else {
-                warn!("Invalid pubkey format: {}", pubkey_str);
-            }
-        }
-        info!("Initialized {} accounts to store in MySQL", accounts.len());
-    }
-    
-    // Initialize MySQL connection
-    init_mysql_connection();
-}
+
 
 #[allow(clippy::too_many_arguments)]
 pub fn confirm_slot(
