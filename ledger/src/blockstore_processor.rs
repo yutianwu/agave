@@ -1490,6 +1490,171 @@ impl ConfirmationProgress {
     }
 }
 
+use base64::{engine::general_purpose::STANDARD, Engine};
+use lazy_static::lazy_static;
+use mysql::prelude::*;
+use mysql::*;
+use solana_sdk::account::{AccountSharedData, ReadableAccount};
+use std::env;
+use std::error::Error;
+use std::fmt;
+
+// Simple MySQL account storage implementation
+lazy_static! {
+    // List of account pubkeys to store in MySQL
+    static ref ACCOUNTS_TO_STORE: Mutex<Vec<Pubkey>> = Mutex::new(Vec::new());
+    // MySQL connection pool
+    static ref MYSQL_POOL: Mutex<Option<Pool>> = Mutex::new(None);
+}
+
+/// Initialize MySQL connection pool
+pub fn init_mysql_connection() {
+    if let Ok(url) = env::var("MYSQL_CONNECTION_URL") {
+        match Opts::from_url(&url) {
+            Ok(opts) => {
+                match Pool::new(opts) {
+                    Ok(pool) => {
+                        // Create the accounts table if it doesn't exist
+                        if let Ok(mut conn) = pool.get_conn() {
+                            let create_table_result = conn.query_drop(
+                                r"CREATE TABLE IF NOT EXISTS accounts (
+                                    pubkey VARCHAR(44) NOT NULL,
+                                    block_height BIGINT NOT NULL,
+                                    lamports BIGINT NOT NULL,
+                                    owner VARCHAR(44) NOT NULL,
+                                    executable BOOLEAN NOT NULL,
+                                    rent_epoch BIGINT NOT NULL,
+                                    data LONGTEXT,
+                                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                    PRIMARY KEY (block_height, pubkey)
+                                )"
+                            );
+                            
+                            if let Err(err) = create_table_result {
+                                warn!("Failed to create accounts table: {}", err);
+                                return;
+                            }
+                        } else {
+                            warn!("Failed to get MySQL connection");
+                            return;
+                        }
+                        
+                        let mut mysql_pool = MYSQL_POOL.lock().unwrap();
+                        *mysql_pool = Some(pool);
+                        info!("MySQL connection initialized successfully");
+                    }
+                    Err(err) => warn!("Failed to create MySQL connection pool: {}", err),
+                }
+            }
+            Err(err) => warn!("Failed to parse MySQL URL: {}", err),
+        }
+    } else {
+        info!("MYSQL_CONNECTION_URL not set, MySQL storage disabled");
+    }
+}
+
+/// Store accounts in MySQL
+pub fn store_accounts_in_mysql(block_height: u64, pubkeys: &[Pubkey], get_account_fn: impl Fn(&Pubkey) -> Option<AccountSharedData>) {
+    if pubkeys.is_empty() {
+        return;
+    }
+    
+    // Check if we have a MySQL connection
+    let pool_guard = MYSQL_POOL.lock().unwrap();
+    let pool = match &*pool_guard {
+        Some(p) => p,
+        None => return,
+    };
+    
+    // Get account data for the specified accounts
+    let accounts_data: Vec<(Pubkey, AccountSharedData)> = pubkeys
+        .iter()
+        .filter_map(|pubkey| {
+            get_account_fn(pubkey)
+                .map(|account| (*pubkey, account))
+        })
+        .collect();
+    
+    if accounts_data.is_empty() {
+        debug!("No accounts found for the specified pubkeys at block height {}", block_height);
+        return;
+    }
+    
+    // Get a connection from the pool
+    let mut conn = match pool.get_conn() {
+        Ok(c) => c,
+        Err(err) => {
+            warn!("Failed to get MySQL connection: {}", err);
+            return;
+        }
+    };
+    
+    // Start a transaction
+    if let Err(err) = conn.query_drop("START TRANSACTION") {
+        warn!("Failed to start MySQL transaction: {}", err);
+        return;
+    }
+    
+    let mut success = true;
+    
+    // Store each account
+    for (pubkey, account) in &accounts_data {
+        let pubkey_str = pubkey.to_string();
+        let owner_str = account.owner().to_string();
+        
+        // Use REPLACE INTO to handle both inserts and updates (will replace based on primary key: block_height + pubkey)
+        let result = conn.exec_drop(
+            r"REPLACE INTO accounts (block_height, pubkey, lamports, owner, executable, rent_epoch, data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                block_height as i64,
+                pubkey_str,
+                account.lamports() as i64,
+                owner_str,
+                account.executable(),
+                account.rent_epoch() as i64,
+                STANDARD.encode(account.data()),
+            ),
+        );
+        
+        if let Err(err) = result {
+            warn!("Failed to store account {} in MySQL: {}", pubkey, err);
+            success = false;
+            break;
+        }
+    }
+    
+    // Commit or rollback the transaction
+    if success {
+        if let Err(err) = conn.query_drop("COMMIT") {
+            warn!("Failed to commit MySQL transaction: {}", err);
+            let _ = conn.query_drop("ROLLBACK");
+        } else {
+            info!("Stored accounts for block height {} in MySQL", block_height);
+        }
+    } else {
+        let _ = conn.query_drop("ROLLBACK");
+    }
+}
+
+// Initialize the accounts to store from environment variable
+pub fn init_accounts_to_store() {
+    if let Ok(accounts_str) = env::var("MYSQL_ACCOUNTS_TO_STORE") {
+        let mut accounts = ACCOUNTS_TO_STORE.lock().unwrap();
+        for pubkey_str in accounts_str.split(',') {
+            if let Ok(pubkey) = pubkey_str.trim().parse::<Pubkey>() {
+                accounts.push(pubkey);
+            } else {
+                warn!("Invalid pubkey format: {}", pubkey_str);
+            }
+        }
+        info!("Initialized {} accounts to store in MySQL", accounts.len());
+    }
+    
+    // Initialize MySQL connection
+    init_mysql_connection();
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn confirm_slot(
     blockstore: &Blockstore,
@@ -1507,6 +1672,16 @@ pub fn confirm_slot(
     prioritization_fee_cache: &PrioritizationFeeCache,
 ) -> result::Result<(), BlockstoreProcessorError> {
     let slot = bank.slot();
+    
+    // Try to store accounts in MySQL if configured
+    let accounts = ACCOUNTS_TO_STORE.lock().unwrap();
+    if !accounts.is_empty() {
+        store_accounts_in_mysql(
+            bank.block_height(),
+            &accounts,
+            |pubkey| bank.get_account(pubkey),
+        );
+    }
 
     let slot_entries_load_result = {
         let mut load_elapsed = Measure::start("load_elapsed");

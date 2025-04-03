@@ -86,6 +86,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
 trees = { workspace = true }
+mysql = "24.0.0"
+serde_json = { workspace = true }
+base64 = "0.21.0"
 
 [dependencies.rocksdb]
 # Avoid the vendored bzip2 within rocksdb-sys that can cause linker conflicts
